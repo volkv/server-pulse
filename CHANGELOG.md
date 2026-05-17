@@ -18,3 +18,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 - systemd timer (5 min interval with 30 s randomized delay).
 - `install.sh` with prerequisite checks, secure config permissions (chmod 600), symlink to `/usr/local/bin`.
 - shellcheck CI workflow.
+
+### Security
+- Bot token and proxy credentials are passed to curl through a `0600` tempfile (`--config`) instead of argv, so they do not leak via `/proc/<pid>/cmdline` to other local users.
+- Config loader refuses to source a file that is a symlink, not a regular file, or not owned by the running user.
+- Numeric thresholds (`*_PCT`, `*_THROTTLE_MIN`, `LOAD_*_MULT`) are validated at startup; typos like `90%` or `abc` no longer cause silent runtime breakage.
+
+### Reliability
+- A Telegram delivery failure no longer aborts the run; remaining checks still execute and the throttle clock is not advanced for the failed alert, so the next cycle retries.
+- `CRIT → WARN` partial recoveries now transition state to `WARN` (previously stayed `CRIT`), making `status` accurate and re-engaging the WARN throttle.
+- `CHECK_DOCKER=true` with `docker` missing on PATH (and the equivalent for `systemctl`) raises a CRITICAL self-check alert instead of silently skipping.

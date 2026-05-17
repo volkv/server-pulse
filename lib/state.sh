@@ -2,12 +2,15 @@
 # server-pulse: per-check alert state, transitions, throttling, and silence.
 #
 # State files live under $SP_STATE_DIR/state/<sanitized-id>.state with KV format:
+#   id=<original check key>
 #   status=OK|WARN|CRIT
 #   last_sent=<epoch>
 #   value=<human description>
 #
 # A check key identifies a single alertable entity, e.g. "disk:/", "memory:ram",
-# "docker:respawn-app". Anything not matching [a-zA-Z0-9_-] becomes '_'.
+# "docker:respawn-app". Anything not matching [a-zA-Z0-9_-] is replaced with '_'
+# when generating the filename; the original id is stored inside the file so
+# `status` can display it verbatim.
 
 sp_state_path() {
     local id="$1"
@@ -57,10 +60,23 @@ sp_silence_active() {
     [[ -f "$file" ]] || return 1
     local until
     until="$(cat "$file" 2>/dev/null || echo 0)"
-    [[ -z "$until" ]] && return 1
+    [[ "$until" =~ ^[0-9]+$ ]] || return 1
     local now
     now="$(date +%s)"
     (( now < until ))
+}
+
+# Send a notification but never propagate failure to the caller — Telegram
+# being temporarily unreachable must not abort the rest of the monitoring
+# run. Returns 0 on success, 1 on send failure. The return code is consumed
+# by sp_state_dispatch to decide whether to advance the throttle clock.
+_sp_state_notify() {
+    local severity="$1" message="$2"
+    if sp_notify "$severity" "$message"; then
+        return 0
+    fi
+    sp_log_warn "Notification delivery failed (severity=$severity); will retry on next run"
+    return 1
 }
 
 # Dispatch a check result.
@@ -84,14 +100,23 @@ sp_state_dispatch() {
             return 0
             ;;
         OK:WARN|OK:CRIT|WARN:CRIT)
-            sp_notify "$new" "$message"
-            sp_state_write "$file" "$new" "$now" "$value" "$id"
+            # New alert or escalation — send immediately. Advance the
+            # throttle clock only on successful delivery so a failed send
+            # is retried next cycle without losing context.
+            if _sp_state_notify "$new" "$message"; then
+                sp_state_write "$file" "$new" "$now" "$value" "$id"
+            else
+                sp_state_write "$file" "$new" 0 "$value" "$id"
+            fi
             ;;
         WARN:WARN)
             local throttle=$(( WARN_THROTTLE_MIN * 60 ))
             if (( now - last_sent >= throttle )); then
-                sp_notify "$new" "$message"
-                sp_state_write "$file" "$new" "$now" "$value" "$id"
+                if _sp_state_notify "$new" "$message"; then
+                    sp_state_write "$file" "$new" "$now" "$value" "$id"
+                else
+                    sp_state_write "$file" "$new" "$last_sent" "$value" "$id"
+                fi
             else
                 sp_state_write "$file" "$new" "$last_sent" "$value" "$id"
             fi
@@ -99,19 +124,27 @@ sp_state_dispatch() {
         CRIT:CRIT)
             local throttle=$(( CRIT_THROTTLE_MIN * 60 ))
             if (( now - last_sent >= throttle )); then
-                sp_notify "$new" "$message"
-                sp_state_write "$file" "$new" "$now" "$value" "$id"
+                if _sp_state_notify "$new" "$message"; then
+                    sp_state_write "$file" "$new" "$now" "$value" "$id"
+                else
+                    sp_state_write "$file" "$new" "$last_sent" "$value" "$id"
+                fi
             else
                 sp_state_write "$file" "$new" "$last_sent" "$value" "$id"
             fi
             ;;
         CRIT:WARN)
-            # De-escalation produces no message; state stays CRIT until OK.
-            sp_state_write "$file" "$prev" "$last_sent" "$value" "$id"
+            # Partial recovery: transition to WARN without a de-escalation
+            # message. The retained last_sent makes WARN_THROTTLE_MIN govern
+            # any future WARN reminders.
+            sp_state_write "$file" "$new" "$last_sent" "$value" "$id"
             ;;
         WARN:OK|CRIT:OK)
             if [[ "$RESOLVED_NOTIFY" == "true" ]]; then
-                sp_notify "RESOLVED" "$message"
+                # Best-effort: clearing state is more important than the
+                # RESOLVED message, otherwise a single failed send would
+                # leave the check stuck in WARN/CRIT forever.
+                _sp_state_notify "RESOLVED" "$message" || true
             fi
             rm -f "$file"
             ;;

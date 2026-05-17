@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 # server-pulse: Telegram Bot API notifier.
 #
-# Honours an optional outbound HTTP/HTTPS proxy (OUTBOUND_PROXY_URI,
-# OUTBOUND_PROXY_AUTH) for environments where api.telegram.org is blocked.
+# Secrets (bot token in URL, proxy credentials) are kept out of the curl
+# command line — other local users would otherwise be able to read them via
+# /proc/<pid>/cmdline or `ps`. The token and proxy creds go into a 0600
+# tempfile that curl reads with --config, then we remove it.
+#
+# Non-secret args (chat_id, text) are passed on the command line; they show
+# up in `ps` but are not credentials.
 
 sp_notify() {
     local severity="$1"   # WARN | CRIT | RESOLVED
@@ -27,41 +32,62 @@ sp_notify() {
     sp_telegram_send "$text"
 }
 
+# Escape a string for use inside a curl-config double-quoted value:
+# backslash and double-quote must be backslash-escaped.
+_sp_cfg_escape() {
+    local v="$1"
+    v="${v//\\/\\\\}"
+    v="${v//\"/\\\"}"
+    printf '%s' "$v"
+}
+
 sp_telegram_send() {
     local text="$1"
-    local url="https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage"
 
-    local curl_args=(
-        -sS
-        --max-time 15
-        --retry 2
-        --retry-delay 2
-        --write-out '\nHTTPSTATUS:%{http_code}'
-        --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}"
-        --data-urlencode "text=${text}"
-        --data-urlencode "disable_web_page_preview=true"
-    )
+    local cfg token_esc proxy_uri_esc proxy_auth_esc
+    cfg="$(umask 077; mktemp -t server-pulse.curlrc.XXXXXX)"
 
-    if [[ -n "${OUTBOUND_PROXY_URI:-}" ]]; then
-        curl_args+=(-x "$OUTBOUND_PROXY_URI")
-        if [[ -n "${OUTBOUND_PROXY_AUTH:-}" ]]; then
-            curl_args+=(-U "$OUTBOUND_PROXY_AUTH")
+    token_esc="$(_sp_cfg_escape "$TELEGRAM_BOT_TOKEN")"
+    {
+        printf 'url = "https://api.telegram.org/bot%s/sendMessage"\n' "$token_esc"
+        if [[ -n "${OUTBOUND_PROXY_URI:-}" ]]; then
+            proxy_uri_esc="$(_sp_cfg_escape "$OUTBOUND_PROXY_URI")"
+            printf 'proxy = "%s"\n' "$proxy_uri_esc"
+            if [[ -n "${OUTBOUND_PROXY_AUTH:-}" ]]; then
+                proxy_auth_esc="$(_sp_cfg_escape "$OUTBOUND_PROXY_AUTH")"
+                printf 'proxy-user = "%s"\n' "$proxy_auth_esc"
+            fi
         fi
-    fi
+        printf 'silent\n'
+        printf 'show-error\n'
+        printf 'max-time = 15\n'
+        printf 'retry = 2\n'
+        printf 'retry-delay = 2\n'
+        printf 'write-out = "\\nHTTPSTATUS:%%{http_code}"\n'
+    } > "$cfg"
 
-    curl_args+=("$url")
+    local response="" rc=0
+    response="$(
+        curl --config "$cfg" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=${text}" \
+            --data-urlencode "disable_web_page_preview=true" \
+            2>&1
+    )" || rc=$?
 
-    local response http_code
-    if ! response="$(curl "${curl_args[@]}" 2>&1)"; then
-        sp_log_error "Telegram curl failed: $response"
+    rm -f "$cfg"
+
+    if (( rc != 0 )); then
+        sp_log_error "Telegram curl failed (rc=${rc}): ${response}"
         return 1
     fi
 
+    local http_code body
     http_code="${response##*HTTPSTATUS:}"
-    response="${response%$'\n'HTTPSTATUS:*}"
+    body="${response%$'\n'HTTPSTATUS:*}"
 
     if [[ "$http_code" != "200" ]]; then
-        sp_log_error "Telegram API HTTP $http_code: $response"
+        sp_log_error "Telegram API HTTP ${http_code}: ${body}"
         return 1
     fi
     return 0

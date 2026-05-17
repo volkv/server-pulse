@@ -5,20 +5,38 @@ SP_CONFIG_PATH="${SP_CONFIG_PATH:-/etc/server-pulse/config.env}"
 SP_STATE_DIR="${SP_STATE_DIR:-/var/lib/server-pulse}"
 
 sp_config_load() {
-    if [[ ! -f "$SP_CONFIG_PATH" ]]; then
+    if [[ ! -e "$SP_CONFIG_PATH" ]]; then
         sp_log_error "Config file not found: $SP_CONFIG_PATH"
         sp_log_error "Copy config/config.example.env and edit it before running."
         return 1
     fi
 
-    # Security gate: the config contains the Telegram bot token. Refuse to
-    # start if it is readable by anyone other than owner (or owner+group).
-    local mode
-    mode="$(stat -c '%a' "$SP_CONFIG_PATH")"
-    case "$mode" in
+    # The config is sourced as the calling user. Refuse to run if it could
+    # have been tampered with — must be a regular file (not a symlink),
+    # owned by the effective UID, and not group/world writable.
+    if [[ -L "$SP_CONFIG_PATH" ]]; then
+        sp_log_error "Config path is a symlink — refusing to source: $SP_CONFIG_PATH"
+        return 1
+    fi
+    if [[ ! -f "$SP_CONFIG_PATH" ]]; then
+        sp_log_error "Config path is not a regular file: $SP_CONFIG_PATH"
+        return 1
+    fi
+
+    local file_uid file_mode
+    file_uid="$(stat -c '%u' "$SP_CONFIG_PATH")"
+    file_mode="$(stat -c '%a' "$SP_CONFIG_PATH")"
+
+    if [[ "$file_uid" != "$EUID" ]]; then
+        sp_log_error "Config $SP_CONFIG_PATH is owned by uid $file_uid; refusing to source as uid $EUID"
+        sp_log_error "Run: sudo chown $(id -un): $SP_CONFIG_PATH"
+        return 1
+    fi
+
+    case "$file_mode" in
         400|440|600|640) ;;
         *)
-            sp_log_error "Insecure permissions on $SP_CONFIG_PATH: $mode"
+            sp_log_error "Insecure permissions on $SP_CONFIG_PATH: $file_mode (expected 600 or 640)"
             sp_log_error "Run: sudo chmod 600 $SP_CONFIG_PATH"
             return 1
             ;;
@@ -80,8 +98,28 @@ sp_config_apply_defaults() {
         OUTBOUND_PROXY_URI OUTBOUND_PROXY_AUTH
 }
 
+_sp_require_int() {
+    local name="$1"
+    local val="${!name:-}"
+    if ! [[ "$val" =~ ^[0-9]+$ ]]; then
+        sp_log_error "$name must be a non-negative integer (got: \"$val\")"
+        return 1
+    fi
+}
+
+_sp_require_num() {
+    # Non-negative number with optional decimal part.
+    local name="$1"
+    local val="${!name:-}"
+    if ! [[ "$val" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        sp_log_error "$name must be a non-negative number (got: \"$val\")"
+        return 1
+    fi
+}
+
 sp_config_validate() {
     local ok=true
+
     if [[ -z "${TELEGRAM_BOT_TOKEN:-}" ]]; then
         sp_log_error "TELEGRAM_BOT_TOKEN is not set"
         ok=false
@@ -98,5 +136,19 @@ sp_config_validate() {
         sp_log_error "CHECK_SYSTEMD=true but SYSTEMD_UNITS is empty"
         ok=false
     fi
+
+    local var
+    for var in DISK_WARN_PCT DISK_CRIT_PCT \
+               INODE_WARN_PCT INODE_CRIT_PCT \
+               RAM_WARN_PCT RAM_CRIT_PCT \
+               SWAP_WARN_PCT SWAP_CRIT_PCT \
+               CPU_WARN_PCT CPU_CRIT_PCT \
+               WARN_THROTTLE_MIN CRIT_THROTTLE_MIN; do
+        _sp_require_int "$var" || ok=false
+    done
+    for var in LOAD_WARN_MULT LOAD_CRIT_MULT; do
+        _sp_require_num "$var" || ok=false
+    done
+
     [[ "$ok" == "true" ]]
 }
