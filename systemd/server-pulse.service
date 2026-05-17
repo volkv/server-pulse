@@ -1,0 +1,15 @@
+[Unit]
+Description=server-pulse — Linux server health monitor with Telegram alerts
+Documentation=https://github.com/volkv/server-pulse
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/server-pulse run
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

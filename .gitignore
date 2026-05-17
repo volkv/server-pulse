@@ -1,0 +1,23 @@
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Local test configs (never commit secrets)
+config/config.env
+config/*.local.env
+.env
+.env.local
+
+# Local state when running from repo
+state/
+*.state
+*.cursor
+*.seen
+silence
+
+# tmp
+*.tmp
+*.bak

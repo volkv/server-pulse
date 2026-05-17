@@ -1,0 +1,195 @@
+#!/usr/bin/env bash
+# server-pulse — Linux server health monitor with Telegram alerts.
+# https://github.com/volkv/server-pulse
+
+set -euo pipefail
+
+SP_VERSION="1.0.0"
+
+# Resolve the install root, supporting both running from a checkout
+# (<repo>/bin/server-pulse) and from /opt/server-pulse/bin/server-pulse.
+_sp_resolve_root() {
+    local script
+    script="$(readlink -f "$0")"
+    dirname "$(dirname "$script")"
+}
+SP_ROOT="$(_sp_resolve_root)"
+
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=../lib/log.sh
+source "$SP_ROOT/lib/log.sh"
+# shellcheck source=../lib/config.sh
+source "$SP_ROOT/lib/config.sh"
+# shellcheck source=../lib/state.sh
+source "$SP_ROOT/lib/state.sh"
+# shellcheck source=../lib/notify/telegram.sh
+source "$SP_ROOT/lib/notify/telegram.sh"
+# shellcheck source=../lib/checks/disk.sh
+source "$SP_ROOT/lib/checks/disk.sh"
+# shellcheck source=../lib/checks/inode.sh
+source "$SP_ROOT/lib/checks/inode.sh"
+# shellcheck source=../lib/checks/memory.sh
+source "$SP_ROOT/lib/checks/memory.sh"
+# shellcheck source=../lib/checks/load.sh
+source "$SP_ROOT/lib/checks/load.sh"
+# shellcheck source=../lib/checks/cpu.sh
+source "$SP_ROOT/lib/checks/cpu.sh"
+# shellcheck source=../lib/checks/oom.sh
+source "$SP_ROOT/lib/checks/oom.sh"
+# shellcheck source=../lib/checks/docker.sh
+source "$SP_ROOT/lib/checks/docker.sh"
+# shellcheck source=../lib/checks/systemd.sh
+source "$SP_ROOT/lib/checks/systemd.sh"
+
+sp_usage() {
+    cat <<EOF
+server-pulse ${SP_VERSION} — Linux server health monitor with Telegram alerts
+
+USAGE
+    server-pulse <command> [args]
+
+COMMANDS
+    run                  Run all enabled checks and send notifications
+    test                 Send a test notification to Telegram
+    status               Show the current state of all checks
+    silence <duration>   Suppress notifications for a duration (e.g. 30m, 2h, 1d)
+    unsilence            Clear an active silence
+    version              Show version
+
+EXAMPLES
+    server-pulse run
+    server-pulse test
+    server-pulse silence 1h
+
+CONFIG
+    ${SP_CONFIG_PATH}
+
+DOCS
+    https://github.com/volkv/server-pulse
+EOF
+}
+
+sp_parse_duration() {
+    local d="$1"
+    if [[ "$d" =~ ^([0-9]+)([smhd])$ ]]; then
+        local n="${BASH_REMATCH[1]}" unit="${BASH_REMATCH[2]}"
+        case "$unit" in
+            s) echo "$n" ;;
+            m) echo $(( n * 60 )) ;;
+            h) echo $(( n * 3600 )) ;;
+            d) echo $(( n * 86400 )) ;;
+        esac
+        return 0
+    fi
+    return 1
+}
+
+sp_cmd_run() {
+    sp_config_load || exit 1
+    sp_check_disk
+    sp_check_inode
+    sp_check_memory
+    sp_check_load
+    sp_check_cpu
+    sp_check_oom
+    sp_check_docker
+    sp_check_systemd
+}
+
+sp_cmd_test() {
+    sp_config_load || exit 1
+    local msg
+    msg="$(printf 'server-pulse %s test notification\nServer: %s\nKernel: %s' \
+        "$SP_VERSION" "$SERVER_NAME" "$(uname -r)")"
+    if sp_telegram_send "$msg"; then
+        sp_log_info "Test notification sent to chat ${TELEGRAM_CHAT_ID}"
+    else
+        sp_log_error "Test notification failed"
+        exit 1
+    fi
+}
+
+sp_cmd_status() {
+    sp_config_load || exit 1
+
+    local state_dir="${SP_STATE_DIR}/state"
+    local has_states=false
+    if [[ -d "$state_dir" ]]; then
+        local f
+        for f in "$state_dir"/*.state; do
+            [[ -e "$f" ]] || continue
+            has_states=true
+            break
+        done
+    fi
+
+    if ! $has_states; then
+        echo "All checks OK — no active alerts."
+    else
+        printf '%-32s %-6s %s\n' "CHECK" "STATE" "VALUE"
+        printf '%-32s %-6s %s\n' "--------------------------------" "------" "-----"
+        local file id status value
+        for file in "$state_dir"/*.state; do
+            [[ -e "$file" ]] || continue
+            id="$(awk -F= '/^id=/ {sub(/^id=/, ""); print; exit}' "$file")"
+            [[ -z "$id" ]] && id="$(basename "$file" .state)"
+            status="$(awk -F= '/^status=/ {print $2; exit}' "$file")"
+            value="$(awk -F= '/^value=/ {sub(/^value=/, ""); print; exit}' "$file")"
+            printf '%-32s %-6s %s\n' "$id" "$status" "$value"
+        done
+    fi
+
+    if sp_silence_active; then
+        local until
+        until="$(cat "${SP_STATE_DIR}/silence")"
+        echo ""
+        echo "🔕 Notifications silenced until $(date -d "@${until}" '+%Y-%m-%d %H:%M:%S')"
+    fi
+}
+
+sp_cmd_silence() {
+    sp_config_load || exit 1
+    local dur="${1:-}"
+    if [[ -z "$dur" ]]; then
+        sp_log_error "silence: duration required (e.g. 30m, 2h, 1d)"
+        exit 1
+    fi
+    local seconds
+    if ! seconds="$(sp_parse_duration "$dur")"; then
+        sp_log_error "Invalid duration: $dur (use e.g. 30m, 2h, 1d)"
+        exit 1
+    fi
+    local now until_ts
+    now="$(date +%s)"
+    until_ts=$(( now + seconds ))
+    mkdir -p "$SP_STATE_DIR"
+    echo "$until_ts" > "${SP_STATE_DIR}/silence"
+    sp_log_info "Silenced until $(date -d "@${until_ts}" '+%Y-%m-%d %H:%M:%S')"
+}
+
+sp_cmd_unsilence() {
+    sp_config_load || exit 1
+    rm -f "${SP_STATE_DIR}/silence"
+    sp_log_info "Silence cleared"
+}
+
+main() {
+    local cmd="${1:-}"
+    shift || true
+    case "$cmd" in
+        run)                  sp_cmd_run "$@" ;;
+        test)                 sp_cmd_test "$@" ;;
+        status)               sp_cmd_status "$@" ;;
+        silence)              sp_cmd_silence "$@" ;;
+        unsilence)            sp_cmd_unsilence "$@" ;;
+        version|-v|--version) echo "server-pulse ${SP_VERSION}" ;;
+        help|-h|--help|"")    sp_usage ;;
+        *)
+            sp_log_error "Unknown command: $cmd"
+            sp_usage
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"

@@ -1,0 +1,22 @@
+name: shellcheck
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update -qq && sudo apt-get install -y shellcheck
+      - name: Run shellcheck
+        shell: bash
+        run: |
+          set -e
+          shopt -s globstar nullglob
+          files=(install.sh bin/server-pulse lib/**/*.sh)
+          echo "Checking: ${files[*]}"
+          shellcheck -x -e SC1091 "${files[@]}"
