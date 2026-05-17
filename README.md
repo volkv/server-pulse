@@ -5,7 +5,7 @@
 ![Bash 4+](https://img.shields.io/badge/bash-4%2B-89e051?logo=gnubash&logoColor=white)
 ![systemd](https://img.shields.io/badge/systemd-required-orange)
 
-> **server-pulse** is a tiny Linux server health monitor that sends Telegram alerts before your **VPS**, **dedicated server**, or **homelab** box runs out of disk, memory, CPU, or Docker services. Pure bash, no runtime dependencies, 60-second install.
+> **server-pulse** is a tiny Linux server health monitor that sends Telegram alerts before your **VPS**, **dedicated server**, or **homelab** box runs out of disk, memory, CPU, or Docker services. Pure bash, no language runtime, no long-running daemon. 60-second install.
 
 Drop it on any Linux machine — a $5 VPS, a bare-metal dedic, a Raspberry Pi, a cloud instance — and you'll know **the moment something starts going wrong**, not after the site goes down.
 
@@ -28,12 +28,12 @@ Most monitoring stacks are designed for fleets, dashboards, and SREs. If you run
 
 server-pulse is that script — but with the production-grade bits (proper alert throttling, OOM dedup, secure config, systemd integration) already done for you.
 
-- **No language runtime.** Just bash, curl, awk, grep, sed, coreutils, systemd. Everything you already have on any Linux box.
+- **No language runtime, no daemon.** Just bash, curl, awk, grep, sed, coreutils, systemd. No Python, no Go binary, no database, no long-running process. Everything you already have on any Linux box.
 - **60-second install.** One curl command, edit a config, enable a timer.
 - **No noisy alerts.** Built-in throttling, WARN→CRITICAL escalation, RESOLVED messages.
 - **No false positives on OOM.** Journal dedup so the same kill isn't reported every 5 minutes.
 - **Telegram-native.** Just a bot token and a chat ID. Supports outbound HTTP proxy for blocked regions.
-- **Single host, no agents.** Each server pushes its own alerts. No aggregator, no central server, no SPoF.
+- **No central collector.** Each host runs a oneshot script on a 5-minute systemd timer and sends its own alerts. Add a server without changing anything central.
 
 ---
 
@@ -164,13 +164,21 @@ No aggregator, no pull-based discovery, no central agent. If you have 10 servers
 
 ---
 
+## Footprint
+
+server-pulse is a oneshot script, not a daemon. On a typical Ubuntu/Debian host one run takes 1–2 seconds and exits; the process holds about 10–15 MB of RAM only while running and nothing in between cycles. There is no background process between timer ticks.
+
+Storage on disk is negligible — the installed tree under `/opt/server-pulse` is a few hundred KB; runtime state files in `/var/lib/server-pulse` are a handful of bytes per active alert.
+
+---
+
 ## How it compares
 
 | | **server-pulse** | Netdata | Monit | Prometheus + Alertmanager | Glances |
 |---|---|---|---|---|---|
 | Install time | **60s** | ~5 min | ~10 min | 30+ min | ~2 min |
-| RAM footprint | **~5 MB (per run)** | ~150 MB resident | ~10 MB | ~300 MB+ | ~50 MB |
-| Runtime deps | **none** | bundled binaries | none | Go runtime | Python |
+| RAM footprint | **~10–15 MB (per run, none idle)** | ~150 MB resident | ~10 MB | ~300 MB+ | ~50 MB |
+| Language runtime | **none** | bundled binaries | none | Go runtime | Python |
 | Telegram alerts | **built-in** | plugin | external script | via Alertmanager | none |
 | Outbound proxy support | **built-in** | manual | manual | manual | n/a |
 | Historical graphs | no | yes | no | yes (Grafana) | live only |
@@ -186,23 +194,27 @@ Detailed comparison: [docs/comparison.md](docs/comparison.md).
 
 ### How do I monitor a Linux server with Telegram alerts?
 
-Install server-pulse via the curl one-liner above, drop your bot token in the config, and enable the timer. You'll get alerts in Telegram every time a metric crosses a threshold.
+Install server-pulse via the curl one-liner above, drop your bot token in the config, and enable the systemd timer. Every 5 minutes server-pulse checks disk, RAM, CPU, load, swap, OOM events, Docker containers, and systemd units, and sends a Telegram alert whenever a metric crosses a threshold.
 
-### What's a lightweight alternative to Netdata?
+### What is a lightweight alternative to Netdata for Telegram alerts?
 
-If you don't need real-time graphs and a web UI, and only want to be notified when something breaks, server-pulse is roughly 30× lighter than Netdata and installs in 60 seconds with one command.
+If you don't need real-time graphs, a web UI, or a metrics history, server-pulse covers the "tell me when something breaks" slice of what Netdata does — at a tiny fraction of the RAM cost and a 60-second install. You give up graphs and historical data; you get a bash script with no daemon.
 
-### How do I get a Telegram alert when disk space is low on my VPS?
+### How do I monitor disk space on Linux and send Telegram alerts?
 
-`CHECK_DISK=true` is on by default. The defaults trigger a WARNING at 85% and a CRITICAL at 95% on every non-virtual mountpoint. Adjust via `DISK_WARN_PCT` and `DISK_CRIT_PCT`.
+`CHECK_DISK=true` is on by default. server-pulse runs `df` every 5 minutes on every non-virtual mountpoint and sends a Telegram WARNING at 85% and a CRITICAL at 95%. Override the thresholds via `DISK_WARN_PCT` and `DISK_CRIT_PCT` in `/etc/server-pulse/config.env`.
 
-### How do I monitor Docker containers and get Telegram notifications?
+### How do I monitor CPU and RAM on a VPS with Telegram notifications?
 
-Set `CHECK_DOCKER=true` and `DOCKER_CONTAINERS="app db redis"` in the config. server-pulse uses `docker inspect` to verify each container is in the `running` state; if not, you get a CRITICAL alert.
+CPU and memory checks are on by default. CPU is sampled over a 1-second window of `/proc/stat`; RAM is measured against `MemAvailable` from `/proc/meminfo`. Defaults: WARNING at 85%, CRITICAL at 95% for both. Tune with `CPU_WARN_PCT`, `CPU_CRIT_PCT`, `RAM_WARN_PCT`, `RAM_CRIT_PCT`.
 
-### How do I detect OOM kills on Linux and alert myself?
+### How do I monitor Docker containers with a bash script?
 
-`CHECK_OOM=true` is on by default. server-pulse scans `journalctl -k` for `killed process` / `out of memory` / `invoked oom-killer` messages, deduplicates by SHA-1 hash, and sends a CRITICAL for new events only.
+Set `CHECK_DOCKER=true` and `DOCKER_CONTAINERS="app db redis"` in `/etc/server-pulse/config.env`. server-pulse uses `docker inspect` to verify each container is in the `running` state; anything else (`exited`, `restarting`, missing) raises a CRITICAL Telegram alert.
+
+### How do I get alerts for Linux OOM killer events?
+
+`CHECK_OOM=true` is on by default. server-pulse scans `journalctl -k` for `killed process` / `out of memory` / `invoked oom-killer` messages every 5 minutes, deduplicates by SHA-1 hash of the matched line, and sends one CRITICAL alert per new event.
 
 ### Does server-pulse work behind a corporate firewall or in a blocked region?
 

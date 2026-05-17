@@ -1,4 +1,4 @@
-# Configuration reference
+# server-pulse configuration reference
 
 server-pulse reads a single shell-format env file at `/etc/server-pulse/config.env`. The installer creates it from `config/config.example.env` and locks it to `chmod 600`.
 

@@ -1,4 +1,4 @@
-# FAQ
+# server-pulse FAQ — Linux server monitoring with Telegram alerts
 
 Common questions about server-pulse — practical answers.
 

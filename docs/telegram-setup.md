@@ -1,4 +1,4 @@
-# Telegram bot setup
+# Telegram bot setup for server-pulse alerts
 
 A complete walk-through for getting Telegram notifications working with server-pulse.
 

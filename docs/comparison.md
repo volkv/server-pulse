@@ -1,4 +1,4 @@
-# server-pulse vs other monitoring tools
+# server-pulse vs Netdata, Monit, Prometheus and Glances
 
 When to pick server-pulse — and when not to.
 

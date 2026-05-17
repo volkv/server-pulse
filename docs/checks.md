@@ -1,4 +1,4 @@
-# Checks reference
+# Linux server health checks reference — server-pulse
 
 Every check has an on/off toggle, threshold envs, and a state key used for alert tracking. All envs live in `/etc/server-pulse/config.env`.
 
