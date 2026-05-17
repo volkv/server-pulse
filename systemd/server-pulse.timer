@@ -1,12 +1,12 @@
 [Unit]
-Description=Run server-pulse health checks every 5 minutes
+Description=Run server-pulse health checks every 2 minutes
 Documentation=https://github.com/volkv/server-pulse
 
 [Timer]
 OnBootSec=2min
-OnUnitActiveSec=5min
-RandomizedDelaySec=30s
-AccuracySec=10s
+OnUnitActiveSec=2min
+RandomizedDelaySec=15s
+AccuracySec=5s
 Unit=server-pulse.service
 Persistent=true
 
