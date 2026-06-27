@@ -71,7 +71,11 @@ sp_silence_active() {
 # run. Returns 0 on success, 1 on send failure. The return code is consumed
 # by sp_state_dispatch to decide whether to advance the throttle clock.
 _sp_state_notify() {
-    local severity="$1" message="$2"
+    local severity="$1" message="$2" check="${3:-}"
+    # Mission Control sink — mirrors the same notify decisions (so it inherits
+    # throttling) but runs independent of Telegram silence, and fire-and-forget:
+    # its result never gates Telegram delivery or the throttle clock below.
+    sp_mc_report "$severity" "$check" "$message" || true
     if sp_notify "$severity" "$message"; then
         return 0
     fi
@@ -103,7 +107,7 @@ sp_state_dispatch() {
             # New alert or escalation — send immediately. Advance the
             # throttle clock only on successful delivery so a failed send
             # is retried next cycle without losing context.
-            if _sp_state_notify "$new" "$message"; then
+            if _sp_state_notify "$new" "$message" "$id"; then
                 sp_state_write "$file" "$new" "$now" "$value" "$id"
             else
                 sp_state_write "$file" "$new" 0 "$value" "$id"
@@ -112,7 +116,7 @@ sp_state_dispatch() {
         WARN:WARN)
             local throttle=$(( WARN_THROTTLE_MIN * 60 ))
             if (( now - last_sent >= throttle )); then
-                if _sp_state_notify "$new" "$message"; then
+                if _sp_state_notify "$new" "$message" "$id"; then
                     sp_state_write "$file" "$new" "$now" "$value" "$id"
                 else
                     sp_state_write "$file" "$new" "$last_sent" "$value" "$id"
@@ -124,7 +128,7 @@ sp_state_dispatch() {
         CRIT:CRIT)
             local throttle=$(( CRIT_THROTTLE_MIN * 60 ))
             if (( now - last_sent >= throttle )); then
-                if _sp_state_notify "$new" "$message"; then
+                if _sp_state_notify "$new" "$message" "$id"; then
                     sp_state_write "$file" "$new" "$now" "$value" "$id"
                 else
                     sp_state_write "$file" "$new" "$last_sent" "$value" "$id"
@@ -144,7 +148,7 @@ sp_state_dispatch() {
                 # Best-effort: clearing state is more important than the
                 # RESOLVED message, otherwise a single failed send would
                 # leave the check stuck in WARN/CRIT forever.
-                _sp_state_notify "RESOLVED" "$message" || true
+                _sp_state_notify "RESOLVED" "$message" "$id" || true
             fi
             rm -f "$file"
             ;;

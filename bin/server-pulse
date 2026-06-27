@@ -24,6 +24,8 @@ source "$SP_ROOT/lib/config.sh"
 source "$SP_ROOT/lib/state.sh"
 # shellcheck source=../lib/notify/telegram.sh
 source "$SP_ROOT/lib/notify/telegram.sh"
+# shellcheck source=../lib/notify/mission-control.sh
+source "$SP_ROOT/lib/notify/mission-control.sh"
 # shellcheck source=../lib/checks/disk.sh
 source "$SP_ROOT/lib/checks/disk.sh"
 # shellcheck source=../lib/checks/inode.sh

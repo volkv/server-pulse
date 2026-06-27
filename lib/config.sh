@@ -88,6 +88,9 @@ sp_config_apply_defaults() {
     : "${OUTBOUND_PROXY_URI:=}"
     : "${OUTBOUND_PROXY_AUTH:=}"
 
+    : "${MC_URL:=}"
+    : "${MC_TOKEN:=}"
+
     export SERVER_NAME \
         DISK_WARN_PCT DISK_CRIT_PCT INODE_WARN_PCT INODE_CRIT_PCT \
         RAM_WARN_PCT RAM_CRIT_PCT SWAP_WARN_PCT SWAP_CRIT_PCT \
@@ -95,7 +98,8 @@ sp_config_apply_defaults() {
         CHECK_DISK CHECK_INODE CHECK_MEMORY CHECK_LOAD CHECK_CPU CHECK_OOM \
         CHECK_DOCKER CHECK_SYSTEMD DOCKER_CONTAINERS SYSTEMD_UNITS \
         DISK_EXCLUDE_REGEX WARN_THROTTLE_MIN CRIT_THROTTLE_MIN RESOLVED_NOTIFY \
-        OUTBOUND_PROXY_URI OUTBOUND_PROXY_AUTH
+        OUTBOUND_PROXY_URI OUTBOUND_PROXY_AUTH \
+        MC_URL MC_TOKEN
 }
 
 _sp_require_int() {
@@ -135,6 +139,12 @@ sp_config_validate() {
     if [[ "$CHECK_SYSTEMD" == "true" && -z "$SYSTEMD_UNITS" ]]; then
         sp_log_error "CHECK_SYSTEMD=true but SYSTEMD_UNITS is empty"
         ok=false
+    fi
+
+    # Mission Control sink is optional, but a half-configured one silently sends
+    # nothing — warn (don't fail) so a typo'd setup is noticed.
+    if { [[ -n "${MC_URL:-}" && -z "${MC_TOKEN:-}" ]]; } || { [[ -z "${MC_URL:-}" && -n "${MC_TOKEN:-}" ]]; }; then
+        sp_log_warn "Mission Control sink half-configured (need both MC_URL and MC_TOKEN) — MC reports disabled"
     fi
 
     local var
