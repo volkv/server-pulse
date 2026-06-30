@@ -28,6 +28,7 @@ _sp_check_ram() {
     used_mb=$(( (mem_total - mem_avail) / 1024 ))
     total_mb=$(( mem_total / 1024 ))
     value="${used_pct}% (${used_mb} MB / ${total_mb} MB)"
+    sp_metric_record "ram" "$used_pct"
     sp_state_dispatch "memory:ram" "$status" "$value" "RAM usage: ${value}"
 }
 
@@ -52,5 +53,6 @@ _sp_check_swap() {
     used_mb=$(( (swap_total - swap_free) / 1024 ))
     total_mb=$(( swap_total / 1024 ))
     value="${used_pct}% (${used_mb} MB / ${total_mb} MB)"
+    sp_metric_record "swap" "$used_pct"
     sp_state_dispatch "memory:swap" "$status" "$value" "Swap usage: ${value}"
 }

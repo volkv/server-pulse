@@ -38,8 +38,11 @@ The data flow is uniform across all checks:
 
 ```
 sp_check_<name>  →  sp_state_dispatch(id, status, value, message)  →  _sp_state_notify  →  sp_notify → sp_telegram_send
-                                                                                          ↘  sp_mc_report → POST /api/ingest/server
+                 ↘  sp_metric_record(key, value)                                          ↘  sp_mc_report → POST /api/ingest/server
+                                                                  (end of run) sp_mc_metrics_flush → POST /api/ingest/host-metrics
 ```
+
+Two streams reach Mission Control, on different paths: **threshold alerts** (state transitions → `sp_mc_report` → `observed_events`, only on change) and the **raw numeric stream** (every check records its value → one batched `sp_mc_metrics_flush` at the end of the run → `host_metrics`, powering the dashboard VPS tiles/sparklines).
 
 Layers:
 
@@ -48,6 +51,7 @@ Layers:
 - **`lib/state.sh`** — the alert state machine. This is the core of the system. Each alertable entity gets a state file `state/<sanitized-id>.state`. `sp_state_dispatch` reads the previous status and decides whether to notify based on the `prev:new` transition (see below). It owns throttling, escalation, and RESOLVED.
 - **`lib/notify/telegram.sh`** — `sp_notify` formats the severity header (`🚨 CRITICAL · <SERVER_NAME>`) and short-circuits on active silence; `sp_telegram_send` does the curl. **Secrets (bot token, proxy creds) go in a 0600 tempfile passed via `curl --config`, never on the command line** — other local users can read argv via `/proc`.
 - **`lib/notify/mission-control.sh`** — `sp_mc_report` mirrors WARN/CRIT/RESOLVED into the Mission Control fleet timeline (`POST /api/ingest/server`). Optional (no-op unless `MC_URL`+`MC_TOKEN` are set), fire-and-forget (a failed POST never aborts the run), and **independent of silence** (the timeline records even when Telegram is muted). The bearer token goes in a `curl --config` tempfile like the Telegram notifier; the JSON payload is built without `jq` (pure bash). MC attributes the event by matching `SERVER_NAME` against `projects.host` — no slug is sent.
+- **`lib/notify/metrics.sh`** — the numeric metrics sink, orthogonal to `sp_mc_report`. Checks call `sp_metric_record <key> <value>` (canonical keys `cpu`/`ram`/`swap`/`load`/`disk:<mount>`/`inode:<mount>`; non-numeric input dropped) into an accumulator; `sp_mc_metrics_flush` ships the whole batch once at the end of `run` as `POST /api/ingest/host-metrics`. Same optional/fail-safe/0600-curlrc conventions and the same `MC_URL`+`MC_TOKEN` pair as `sp_mc_report`. This is a value stream (every cycle), not an event stream (transitions only).
 - **`lib/log.sh`** — timestamped stderr logging (captured by journald under systemd).
 
 ### State machine (lib/state.sh) — the part to understand before editing

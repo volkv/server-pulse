@@ -26,6 +26,8 @@ source "$SP_ROOT/lib/state.sh"
 source "$SP_ROOT/lib/notify/telegram.sh"
 # shellcheck source=../lib/notify/mission-control.sh
 source "$SP_ROOT/lib/notify/mission-control.sh"
+# shellcheck source=../lib/notify/metrics.sh
+source "$SP_ROOT/lib/notify/metrics.sh"
 # shellcheck source=../lib/checks/disk.sh
 source "$SP_ROOT/lib/checks/disk.sh"
 # shellcheck source=../lib/checks/inode.sh
@@ -96,6 +98,8 @@ sp_cmd_run() {
     sp_check_oom
     sp_check_docker
     sp_check_systemd
+    # Ship the numeric value stream accumulated by the checks above (MC sink; no-op if unconfigured).
+    sp_mc_metrics_flush || true
 }
 
 sp_cmd_test() {

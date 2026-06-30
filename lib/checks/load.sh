@@ -21,5 +21,6 @@ sp_check_load() {
     mult="$(awk -v l="$load5" -v c="$cores" 'BEGIN { printf "%.2f", l/c }')"
     value="${load5} (5min) on ${cores} cores  →  ${mult}x"
 
+    sp_metric_record "load" "$mult"
     sp_state_dispatch "load" "$status" "$value" "Load average: ${value}"
 }

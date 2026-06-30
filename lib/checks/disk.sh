@@ -22,6 +22,7 @@ sp_check_disk() {
 
         value="${pct_num}% on ${mount} (free: ${avail} / ${size})"
         message="Disk usage: ${value}"
+        sp_metric_record "disk:${mount}" "$pct_num"
         sp_state_dispatch "disk:${mount}" "$status" "$value" "$message"
     done < <(df -hP -x tmpfs -x devtmpfs -x squashfs -x overlay 2>/dev/null)
 

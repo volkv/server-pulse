@@ -36,5 +36,6 @@ sp_check_cpu() {
     fi
 
     value="${used_pct}%"
+    sp_metric_record "cpu" "$used_pct"
     sp_state_dispatch "cpu" "$status" "$value" "CPU usage: ${value}"
 }

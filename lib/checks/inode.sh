@@ -24,6 +24,7 @@ sp_check_inode() {
 
         value="${pct_num}% on ${mount} (free: ${ifree} / ${inodes})"
         message="Inode usage: ${value}"
+        sp_metric_record "inode:${mount}" "$pct_num"
         sp_state_dispatch "inode:${mount}" "$status" "$value" "$message"
     done < <(df -iP -x tmpfs -x devtmpfs -x squashfs -x overlay 2>/dev/null)
 
