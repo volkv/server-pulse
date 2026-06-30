@@ -21,6 +21,10 @@ sp_check_load() {
     mult="$(awk -v l="$load5" -v c="$cores" 'BEGIN { printf "%.2f", l/c }')"
     value="${load5} (5min) on ${cores} cores  →  ${mult}x"
 
-    sp_metric_record "load" "$mult"
+    # Stream the RAW 5-min load average (matches uptime/htop) plus the core count, so MC can
+    # display the familiar number and colour it per-core. The normalized multiplier stays an
+    # alert-threshold detail (above), not the surfaced metric.
+    sp_metric_record "load" "$load5"
+    sp_metric_record "cores" "$cores"
     sp_state_dispatch "load" "$status" "$value" "Load average: ${value}"
 }
